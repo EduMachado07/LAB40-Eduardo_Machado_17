@@ -1,0 +1,16 @@
+# Mantém a imagem pequena e sem arquivos de desenvolvimento.
+.git
+.github
+.gitignore
+node_modules
+tests
+coverage
+lcov.info
+dist
+*.tar
+*.tar.gz
+deployment-record.txt
+eslint.config.js
+README.md
+Dockerfile
+.dockerignore

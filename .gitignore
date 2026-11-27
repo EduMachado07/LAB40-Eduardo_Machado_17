@@ -3,3 +3,5 @@ coverage/
 dist/
 *.tar.gz
 lcov.info
+*.tar
+deployment-record.txt
