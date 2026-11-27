@@ -114,3 +114,33 @@ jobs:
       - name: Log do servidor (em caso de falha)
         if: failure()
         run: cat server.log || true
+
+  # 4. Build da imagem Docker (sem publicar) e teste do container
+  docker:
+    name: 4. Build da imagem Docker
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      IMAGE: lab40:${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Construir imagem identificada pelo SHA
+        run: docker build -t "$IMAGE" .
+
+      - name: Executar container e verificar endpoints
+        run: |
+          docker run -d --name lab40 -p 3000:3000 "$IMAGE"
+          curl --fail --silent --retry 15 --retry-delay 1 --retry-all-errors \
+            http://localhost:3000/health
+          echo
+          curl --fail --silent -X POST "http://localhost:3000/api/features/${FEATURE_ID}" \
+            -H "Content-Type: application/json" -d '{"valores":[8,2,5]}'
+          echo
+          docker image ls lab40
+
+      - name: Log do container (em caso de falha)
+        if: failure()
+        run: docker logs lab40 || true

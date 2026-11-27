@@ -1,15 +1,15 @@
 name: CD
 
-# Entrega contínua: roda somente depois que o CI da main termina com sucesso.
+# Entrega contínua simulada: roda somente depois que o CI da main termina com sucesso.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
 
-# Precisa de escrita para criar a tag e a Release.
+# O CD só lê o código e publica artefatos do próprio workflow.
 permissions:
-  contents: write
+  contents: read
 
 # Uma entrega por vez; nenhuma é cancelada no meio.
 concurrency:
@@ -17,63 +17,95 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Empacotar e publicar Release
+  deploy:
+    name: CD simulado (imagem Docker)
     # Só entrega código que passou no CI após um push (merge) na main.
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    environment: producao-simulada
     env:
       SHA: ${{ github.event.workflow_run.head_sha }}
+      FEATURE_ID: "17"
     steps:
       - name: Checkout do commit aprovado no CI
         uses: actions/checkout@v6
         with:
           ref: ${{ env.SHA }}
 
-      - name: Configurar Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Definir versão
-        id: version
+      - name: Definir identificação da imagem
         run: |
-          base=$(node -p "require('./package.json').version")
-          echo "tag=v${base}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "SHORT_SHA=${SHA:0:7}" >> "$GITHUB_ENV"
+          echo "IMAGE=lab40:${SHA}" >> "$GITHUB_ENV"
+          echo "IMAGE_FILE=lab40-${SHA:0:7}.tar" >> "$GITHUB_ENV"
 
-      - name: Gerar pacote de produção
+      - name: Construir imagem identificada pelo SHA
         run: |
-          mkdir -p dist
-          tar -czf "dist/lab40-${{ steps.version.outputs.tag }}.tar.gz" \
-            src public package.json package-lock.json README.md
-          sha256sum dist/*.tar.gz > dist/SHA256SUMS.txt
-          ls -lh dist
+          docker build \
+            --label "org.opencontainers.image.revision=${SHA}" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            -t "$IMAGE" -t "lab40:sha-${SHORT_SHA}" .
+          docker image ls lab40
 
-      - name: Validar o pacote (instalação limpa + teste de fumaça)
+      - name: Implantação simulada (executar container)
         run: |
-          mkdir -p /tmp/release && tar -xzf dist/*.tar.gz -C /tmp/release
-          cd /tmp/release
-          npm ci --omit=dev
-          PORT=3000 npm start > server.log 2>&1 &
-          curl --fail --silent --retry 10 --retry-delay 1 --retry-connrefused \
-            http://localhost:3000/health
+          docker run -d --name lab40 -p 3000:3000 "$IMAGE"
+          curl --fail --silent --retry 15 --retry-delay 1 --retry-all-errors \
+            http://localhost:3000/health | tee health.json
+          echo
+          curl --fail --silent -X POST "http://localhost:3000/api/features/${FEATURE_ID}" \
+            -H "Content-Type: application/json" -d '{"valores":[8,2,5]}' | tee feature.json
+          echo
 
-      - name: Publicar Release no GitHub
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+      - name: Exportar imagem (.tar)
         run: |
-          gh release create "$TAG" dist/* \
-            --target "$SHA" \
-            --title "LAB40 $TAG" \
-            --notes "Entrega automática do commit ${SHA:0:7}, aprovado no workflow de CI."
+          docker save "$IMAGE" -o "$IMAGE_FILE"
+          ls -lh "$IMAGE_FILE"
 
-      - name: Resumo da entrega
+      - name: Gerar deployment-record.txt
         run: |
           {
-            echo "### Release publicada"
+            echo "LAB40 - REGISTRO DE IMPLANTAÇÃO (CD SIMULADO)"
+            echo "============================================="
+            echo "Status                : SUCESSO"
+            echo "Ambiente              : producao-simulada"
+            echo "Data/hora (UTC)       : $(date -u '+%Y-%m-%d %H:%M:%S')"
+            echo "Repositório           : ${{ github.repository }}"
+            echo "Branch                : main"
+            echo "Commit (SHA)          : ${SHA}"
+            echo "Responsável           : ${{ github.actor }}"
+            echo "Workflow CI de origem : #${{ github.event.workflow_run.run_number }} (${{ github.event.workflow_run.html_url }})"
+            echo "Workflow CD           : #${{ github.run_number }} (${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
             echo
-            echo "- Tag: \`${{ steps.version.outputs.tag }}\`"
-            echo "- Commit: \`${SHA:0:7}\`"
+            echo "IMAGEM"
+            echo "Tags                  : ${IMAGE}, lab40:sha-${SHORT_SHA}"
+            echo "Image ID              : $(docker image inspect "$IMAGE" --format '{{.Id}}')"
+            echo "Tamanho               : $(( $(docker image inspect "$IMAGE" --format '{{.Size}}') / 1024 / 1024 )) MB"
+            echo "Arquivo entregue      : ${IMAGE_FILE}"
+            echo "SHA-256 do arquivo    : $(sha256sum "$IMAGE_FILE" | cut -d' ' -f1)"
+            echo
+            echo "VERIFICAÇÕES APÓS A IMPLANTAÇÃO"
+            echo "GET /health           : $(cat health.json)"
+            echo "POST /api/features/17 : $(cat feature.json)"
+          } > deployment-record.txt
+          cat deployment-record.txt
+          {
+            echo "### CD simulado concluído"
+            echo
+            echo '```'
+            cat deployment-record.txt
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Entregar imagem .tar e deployment-record.txt
+        uses: actions/upload-artifact@v6
+        with:
+          name: entrega-lab40-${{ env.SHORT_SHA }}
+          path: |
+            ${{ env.IMAGE_FILE }}
+            deployment-record.txt
+          retention-days: 30
+
+      - name: Log do container (em caso de falha)
+        if: failure()
+        run: docker logs lab40 || true
