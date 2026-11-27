@@ -6,9 +6,17 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "lint": "eslint .",
+    "test": "node --test --test-reporter=spec",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=src/app.js --test-coverage-include=src/features/index.js --test-coverage-include=src/features/feature17.js --test-coverage-lines=90 --test-coverage-branches=90 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.16.0",
+    "globals": "^17.14.0"
   }
 }

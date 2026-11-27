@@ -1,0 +1,79 @@
+name: CD
+
+# Entrega contínua: roda somente depois que o CI da main termina com sucesso.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# Precisa de escrita para criar a tag e a Release.
+permissions:
+  contents: write
+
+# Uma entrega por vez; nenhuma é cancelada no meio.
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Empacotar e publicar Release
+    # Só entrega código que passou no CI após um push (merge) na main.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout do commit aprovado no CI
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Definir versão
+        id: version
+        run: |
+          base=$(node -p "require('./package.json').version")
+          echo "tag=v${base}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Gerar pacote de produção
+        run: |
+          mkdir -p dist
+          tar -czf "dist/lab40-${{ steps.version.outputs.tag }}.tar.gz" \
+            src public package.json package-lock.json README.md
+          sha256sum dist/*.tar.gz > dist/SHA256SUMS.txt
+          ls -lh dist
+
+      - name: Validar o pacote (instalação limpa + teste de fumaça)
+        run: |
+          mkdir -p /tmp/release && tar -xzf dist/*.tar.gz -C /tmp/release
+          cd /tmp/release
+          npm ci --omit=dev
+          PORT=3000 npm start > server.log 2>&1 &
+          curl --fail --silent --retry 10 --retry-delay 1 --retry-connrefused \
+            http://localhost:3000/health
+
+      - name: Publicar Release no GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --target "$SHA" \
+            --title "LAB40 $TAG" \
+            --notes "Entrega automática do commit ${SHA:0:7}, aprovado no workflow de CI."
+
+      - name: Resumo da entrega
+        run: |
+          {
+            echo "### Release publicada"
+            echo
+            echo "- Tag: \`${{ steps.version.outputs.tag }}\`"
+            echo "- Commit: \`${SHA:0:7}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
