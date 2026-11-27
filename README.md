@@ -80,11 +80,20 @@ Os testes usam o executor nativo do Node.js (`node:test`), sem dependências ext
 1. Análise estática com ESLint.
 2. Testes no Node.js 20 e 22; no 22, com cobertura e relatório `lcov` publicado como artefato.
 3. Build de produção (`npm ci --omit=dev`) e teste de fumaça com o servidor real (`/health` e `/api/features/17`).
+4. Build da imagem Docker identificada pelo SHA do commit e teste do container (sem publicar).
 
-**CD** (`.github/workflows/cd.yml`): roda somente depois que o CI da `main` termina com sucesso após um push (merge do PR).
+**CD simulado** (`.github/workflows/cd.yml`): roda somente depois que o CI da `main` termina com sucesso após um push (merge do PR).
 1. Faz checkout exatamente do commit aprovado no CI.
-2. Gera o pacote `lab40-vX.Y.Z-build.N.tar.gz` com o checksum SHA-256.
-3. Valida o pacote com instalação limpa e teste de fumaça.
-4. Publica uma Release no GitHub com o pacote anexado.
+2. Constrói a imagem `lab40:<SHA>` (e `lab40:sha-<SHA curto>`).
+3. Implantação simulada no ambiente `producao-simulada`: executa o container e verifica `/health` e `/api/features/17`.
+4. Exporta a imagem para `lab40-<SHA curto>.tar` (`docker save`).
+5. Gera o `deployment-record.txt` com commit, tags, Image ID, tamanho, checksum do `.tar`, links das execuções e o resultado das verificações.
+6. Entrega o `.tar` e o `deployment-record.txt` como artefato da execução (`entrega-lab40-<SHA curto>`).
 
-Não foi usado Docker: a aplicação não tem dependências de produção nem banco de dados, então o pacote com Node.js já basta para a entrega.
+## Docker
+```bash
+docker build -t lab40:$(git rev-parse HEAD) .
+docker run -p 3000:3000 lab40:$(git rev-parse HEAD)
+```
+- `Dockerfile`: imagem `node:22-alpine`, instala só dependências de produção, roda como usuário `node` e tem `HEALTHCHECK` em `/health`.
+- `.dockerignore`: deixa fora da imagem testes, `node_modules`, `.git`, workflows e arquivos de desenvolvimento.
