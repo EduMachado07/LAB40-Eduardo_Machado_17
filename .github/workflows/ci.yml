@@ -133,7 +133,7 @@ jobs:
       - name: Executar container e verificar endpoints
         run: |
           docker run -d --name lab40 -p 3000:3000 "$IMAGE"
-          curl --fail --silent --retry 15 --retry-delay 1 --retry-connrefused \
+          curl --fail --silent --retry 15 --retry-delay 1 --retry-all-errors \
             http://localhost:3000/health
           echo
           curl --fail --silent -X POST "http://localhost:3000/api/features/${FEATURE_ID}" \
